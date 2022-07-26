@@ -1,9 +1,19 @@
 #!/bin/bash
 
-while true
-do
-
-# Logo
+exists()
+{
+  command -v "$1" >/dev/null 2>&1
+}
+if exists curl; then
+	echo ''
+else
+  sudo apt update && sudo apt install curl -y < "/dev/null"
+fi
+bash_profile=$HOME/.bash_profile
+if [ -f "$bash_profile" ]; then
+    . $HOME/.bash_profile
+fi
+sleep 1 
 
 echo -e '\e[40m\e[91m'
 echo -e '  ____                  _                    '
@@ -19,156 +29,51 @@ echo -e ' / ___ \ (_| (_| | (_| |  __/ | | | | | |_| |'
 echo -e '/_/   \_\___\__ _|\__ _|\___|_| |_| |_|\__  |'
 echo -e '                                       |___/ '
 echo -e '\e[0m'
+sleep 1 
 
-sleep 2
+cd $HOME
+rm -rf subspace*
+wget -O subspace-node https://github.com/subspace/subspace/releases/download/gemini-1b-2022-june-03/subspace-node-ubuntu-x86_64-gemini-1b-2022-june-03 
+wget -O subspace-farmer https://github.com/subspace/subspace/releases/download/gemini-1b-2022-june-03/subspace-farmer-ubuntu-x86_64-gemini-1b-2022-june-03
+chmod +x subspace*
+mv subspace* /usr/local/bin/
 
-# Menu
+systemctl stop subspaced subspaced-farmer &>/dev/null
+rm -rf ~/.local/share/subspace*
 
-PS3='Select an action: '
-options=(
-"Install"
-"Create Wallet"
-"Create Validator"
-"Exit")
-select opt in "${options[@]}"
-do
-case $opt in
+source ~/.bash_profile
+sleep 1
 
-"Install")
-echo "============================================================"
-echo "Install start"
-echo "============================================================"
-
-
-# set vars
-if [ ! $NODENAME ]; then
-	read -p "Enter node name: " NODENAME
-	echo 'export NODENAME='$NODENAME >> $HOME/.bash_profile
-fi
-echo "export WALLET=wallet" >> $HOME/.bash_profile
-echo "export CHAIN_ID=halo-testnet-001" >> $HOME/.bash_profile
-source $HOME/.bash_profile
-
-# update
-sudo apt update && sudo apt upgrade -y
-sudo ufw allow 26656
-sudo ufw allow 1317
-sudo ufw allow 26657
-
-# install go
-source $HOME/.bash_profile
-    if go version > /dev/null 2>&1
-    then
-        echo -e '\n\e[40m\e[92mSkipped Go installation\e[0m'
-    else
-        echo -e '\n\e[40m\e[92mStarting Go installation...\e[0m'
-        cd $HOME && ver="1.17.2"
-        wget "https://golang.org/dl/go$ver.linux-amd64.tar.gz"
-        sudo rm -rf /usr/local/go
-        sudo tar -C /usr/local -xzf "go$ver.linux-amd64.tar.gz"
-        sudo rm "go$ver.linux-amd64.tar.gz"
-        echo "export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin" >> $HOME/.bash_profile
-        echo "export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin" >> $HOME/.bash_profilesource
-        source $HOME/.bash_profile
-        go version
-    fi
-    
-#gcc
-sudo apt update
-sudo apt install build-essential -y
-sudo apt-get install manpages-dev
-gcc --version
-
-#setup a full-node
-wget https://github.com/aura-nw/aura/archive/refs/tags/halo_6ca81d8.tar.gz
-tar -xzvf halo_6ca81d8.tar.gz
-cd aura-halo_6ca81d8
-make
-aurad init $NODENAME
-wget https://raw.githubusercontent.com/aura-nw/testnets/main/halo-testnet-001/genesis.json
-mv genesis.json ~/.aura/config/genesis.json
-cd
-
-# config
-aurad config chain-id halo-testnet-001
-aurad config keyring-backend file
-
-# set minimum gas price
-sed -i -e "s/^minimum-gas-prices *=.*/minimum-gas-prices = \"0.0025uaura\"/" $HOME/.aura/config/app.toml
-
-# set peers and seeds
-SEEDS="10b5458c22c7dc6862ba9c2f4928a60af214c16c@3.210.178.93:26656"
-PEERS=""
-sed -i -e "s/^seeds *=.*/seeds = \"$SEEDS\"/; s/^persistent_peers *=.*/persistent_peers = \"$PEERS\"/" $HOME/.aura/config/config.toml
-
-# enable prometheus
-sed -i -e "s/prometheus = false/prometheus = true/" $HOME/.aura/config/config.toml
-
-# reset
-aurad unsafe-reset-all
-
-# create service
-tee $HOME/aurad.service > /dev/null <<EOF
-[Unit]
-Description=aurad
+echo "[Unit]
+Description=Subspace Node
 After=network.target
 [Service]
-Type=simple
 User=$USER
-ExecStart=$(which aurad) start
+Type=simple
+ExecStart=$(which subspace-node) --chain gemini-1 --execution wasm --pruning 1024 --keep-blocks 1024 --validator --name $SUBSPACE_NODENAME
 Restart=on-failure
-RestartSec=10
 LimitNOFILE=65535
 [Install]
-WantedBy=multi-user.target
-EOF
+WantedBy=multi-user.target" > $HOME/subspaced.service
 
-sudo mv $HOME/aurad.service /etc/systemd/system/
 
-# start service
+echo "[Unit]
+Description=Subspaced Farm
+After=network.target
+[Service]
+User=$USER
+Type=simple
+ExecStart=$(which subspace-farmer) farm --reward-address $SUBSPACE_WALLET --plot-size 100G
+Restart=on-failure
+LimitNOFILE=65535
+[Install]
+WantedBy=multi-user.target" > $HOME/subspaced-farmer.service
+
+
+mv $HOME/subspaced* /etc/systemd/system/
+sudo systemctl restart systemd-journald
 sudo systemctl daemon-reload
-sudo systemctl enable aurad
-sudo systemctl restart aurad
-
-break
-;;
-
-"Create Wallet")
-aurad keys add $WALLET
-echo "============================================================"
-echo "Save address and mnemonic"
-echo "============================================================"
-WALLET_ADDRESS=$(aurad keys show $WALLET -a)
-VALOPER_ADDRESS=$(aurad keys show $WALLET --bech val -a)
-echo 'export WALLET_ADDRESS='${WALLET_ADDRESS} >> $HOME/.bash_profile
-echo 'export VALOPER_ADDRESS='${VALOPER_ADDRESS} >> $HOME/.bash_profile
-source $HOME/.bash_profile
-
-break
-;;
-
-
-"Create Validator") 
-aurad tx staking create-validator \
-  --amount=1000000uaura \
-  --pubkey=$(aurad tendermint show-validator) \
-  --moniker $NODENAME  \
-  --chain-id $CHAIN_ID \
-  --commission-rate="0.10" \
-  --commission-max-rate="0.20" \
-  --commission-max-change-rate="0.01" \
-  --min-self-delegation="1000000" \
-  --gas="auto" \
-  --gas-prices=500uaura \
-  --from $WALLET
-  
-break
-;;
-
-"Exit")
-exit
-;;
-*) echo "invalid option $REPLY";;
-esac
-done
-done
+sudo systemctl enable subspaced subspaced-farmer
+sudo systemctl restart subspaced
+sleep 10
+sudo systemctl restart subspaced-farmer
